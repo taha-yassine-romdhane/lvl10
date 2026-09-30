@@ -28,7 +28,6 @@ import {
   FaTrophy,
   FaTriangleExclamation,
   FaUserSlash,
-  FaXmark,
   FaWandMagicSparkles,
 } from "react-icons/fa6";
 import { getSocket } from "@/lib/clientSocket";
@@ -222,15 +221,6 @@ export default function GamePage() {
   const [now, setNow] = useState(() => Date.now());
   const [online, setOnline] = useState(true);
   const [sheet, setSheet] = useState<"settings" | "help" | null>(null);
-  // First-game tip; initial render is "Connecting…", so reading storage in
-  // the initializer can't cause a hydration mismatch.
-  const [showTip, setShowTip] = useState(() => {
-    try {
-      return typeof window !== "undefined" && !localStorage.getItem("lvl10:tip-done");
-    } catch {
-      return false;
-    }
-  });
 
   const join = useCallback(
     (name: string) => {
@@ -554,15 +544,6 @@ export default function GamePage() {
 
   function changeSettings(patch: Partial<RoomSettings>) {
     socket.emit("updateSettings", patch);
-  }
-
-  function dismissTip() {
-    setShowTip(false);
-    try {
-      localStorage.setItem("lvl10:tip-done", "1");
-    } catch {
-      // private mode: the tip just shows again next time
-    }
   }
 
   // Reconnecting / restoring banner. While showing a cached table the page is
@@ -1085,9 +1066,8 @@ export default function GamePage() {
             >
               <Avatar name={p.name} index={state.players.indexOf(p)} small status={presenceOf(p)} />
               <span className="font-bold">{p.name}</span>
-              <span className="text-slate-300">
-                Lv {Math.min(p.level, 10)} · {p.handCount} cards
-                <span className="hidden sm:inline"> · {p.score} pts</span>
+              <span className="text-slate-400 tabular-nums">
+                {p.handCount} cards
               </span>
               {p.laidDown && <FaCheck className="h-3 w-3 text-emerald-300" />}
               {p.pendingSkips > 0 && <FaBan className="h-3 w-3 text-red-400" />}
@@ -1105,32 +1085,7 @@ export default function GamePage() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-2 sm:ml-auto">
-          <div
-            className={`flex min-w-0 flex-1 items-center justify-center truncate rounded-xl border px-3.5 py-2 text-xs font-bold sm:flex-none ${
-              myTurn
-                ? "accent-banner glow-pulse"
-                : "border-transparent text-slate-400"
-            }`}
-          >
-            {myTurn && (
-              <FaWandMagicSparkles className="mr-1.5 inline h-3 w-3" />
-            )}
-            {myTurn
-              ? state.phase === "draw"
-                ? "Your turn — draw"
-                : "Play, then discard"
-              : `${currentName}'s turn…`}
-            {myTurn && clockSecs !== null && !clock?.stalled && (
-              <span
-                className={`ml-2 font-mono ${
-                  clockSecs <= 10 ? "text-amber-300" : "opacity-70"
-                }`}
-              >
-                {clockSecs}s
-              </span>
-            )}
-          </div>
+        <div className="flex items-center justify-end gap-2 sm:ml-auto">
           <button
             onClick={copyInvite}
             className="panel hidden items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700/60 sm:flex"
@@ -1337,11 +1292,7 @@ export default function GamePage() {
             </span>
             {myTurn && (
               <span className="text-xs font-bold opacity-85 sm:text-sm">
-                {state.phase === "draw"
-                  ? "Draw a card — tap the deck or take the discard"
-                  : you?.laidDown
-                    ? "Add cards to melds, then discard one to finish"
-                    : "Lay down your level if you can, then discard one"}
+                {state.phase === "draw" ? "Draw a card" : "Play, then discard"}
               </span>
             )}
           </div>
@@ -1404,7 +1355,7 @@ export default function GamePage() {
               : myTurn && state.phase === "play"
                 ? selected.length === 1
                   ? "Tap to discard"
-                  : "Discard · pick a card"
+                  : "Discard"
                 : myTurn && state.phase === "draw"
                   ? "Tap to take"
                   : "Discard"}
@@ -1428,40 +1379,13 @@ export default function GamePage() {
             myTurn ? "turn-dock" : ""
           }`}
         >
-          {showTip && (
-            <div className="accent-banner flex items-start gap-2 rounded-xl border px-3 py-2 text-xs">
-              <FaWandMagicSparkles className="mt-0.5 h-3 w-3 shrink-0" />
-              <p className="flex-1 leading-relaxed">
-                <b>Tap</b> cards to select · <b>+ add</b> them to a group ·{" "}
-                <b>Lay down</b> · tap a glowing meld to add to it · tap the{" "}
-                <b>discard pile</b> to end your turn.{" "}
-                <button
-                  onClick={() => setSheet("help")}
-                  className="font-bold underline"
-                >
-                  Full rules
-                </button>
-              </p>
-              <button
-                onClick={dismissTip}
-                aria-label="Dismiss tip"
-                className="-m-1 p-1 opacity-70 hover:opacity-100"
-              >
-                <FaXmark className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div
-              className="flex w-full items-center justify-between gap-2.5 rounded-xl bg-slate-900/50 px-3 py-2 sm:w-auto"
-              title={`${you.score} points`}
+              className="hidden items-center gap-2.5 rounded-xl bg-slate-900/50 px-3 py-2 sm:flex"
+              title={describeLevel(Math.min(you.level, 10))}
             >
               <span className="text-xs font-bold whitespace-nowrap">
                 Level {Math.min(you.level, 10)}
-                <span className="accent">
-                  {" "}
-                  · {describeLevel(Math.min(you.level, 10))}
-                </span>
               </span>
               <div className="flex gap-0.5">
                 {Array.from({ length: 10 }, (_, i) => (
@@ -1488,35 +1412,40 @@ export default function GamePage() {
                     if (dragIds) e.preventDefault();
                   }}
                   onDrop={(e) => dropOnGroup(e, i)}
+                  onClick={() => selected.length > 0 && stageSelected(i)}
                   className={`flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-dashed px-2.5 py-1.5 transition-all duration-200 sm:flex-none ${
-                    dragIds
-                      ? "accent-banner scale-[1.03]"
+                    dragIds || selected.length > 0
+                      ? "accent-banner cursor-pointer"
                       : (staged[i]?.length ?? 0) >= req.size
                         ? "border-emerald-500/50 bg-emerald-500/5"
                         : "border-slate-600/50 bg-slate-900/40"
-                  }`}
+                  } ${dragIds ? "scale-[1.03]" : ""}`}
                 >
                   <div className="flex flex-col items-start">
                     <span
-                      className={`text-[10px] font-bold whitespace-nowrap ${
+                      className={`text-[11px] font-bold whitespace-nowrap ${
                         (staged[i]?.length ?? 0) >= req.size
                           ? "text-emerald-400"
-                          : "text-slate-400"
+                          : "text-slate-300"
                       }`}
                     >
-                      {describeRequirement(req)} · {staged[i]?.length ?? 0}/
-                      {req.size}+
+                      {describeRequirement(req)}
                     </span>
-                    <button
-                      onClick={() => stageSelected(i)}
-                      disabled={selected.length === 0}
-                      title="Add selected cards to this group"
-                      className="mt-0.5 flex items-center gap-1 rounded-md bg-slate-700/80 px-1.5 py-0.5 text-[10px] font-bold text-slate-300 transition-colors hover:bg-slate-600 disabled:opacity-30"
-                    >
-                      <FaPlus className="h-2 w-2" /> add
-                    </button>
+                    <span className="text-[10px] text-slate-500 tabular-nums">
+                      {selected.length > 0 ? (
+                        <span className="flex items-center gap-1 font-bold text-slate-300">
+                          <FaPlus className="h-2 w-2" /> tap to add
+                        </span>
+                      ) : (
+                        `${staged[i]?.length ?? 0}/${req.size}`
+                      )}
+                    </span>
                   </div>
-                  <div className="no-scrollbar flex min-h-14 min-w-11 items-center gap-1 overflow-x-auto">
+                  <div
+                    className="no-scrollbar flex min-h-14 min-w-11 items-center gap-1 overflow-x-auto"
+                    // tapping a staged card takes it back — don't also re-add
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {(staged[i] ?? []).map((id) => {
                       const card = hand.find((c) => c.id === id);
                       return card ? (
@@ -1620,17 +1549,16 @@ export default function GamePage() {
 
       {/* idle warning for the player who is holding things up */}
       {youAreIdle && (
-        <div className="toast-up fixed inset-x-3 top-3 z-50 mx-auto flex max-w-lg flex-col items-center gap-3 rounded-2xl border border-amber-400/60 bg-amber-500/95 px-5 py-4 text-center font-bold text-slate-950 shadow-2xl sm:flex-row sm:text-left">
-          <FaTriangleExclamation className="h-6 w-6 shrink-0" />
-          <p className="flex-1 text-sm">
-            Are you still there? You haven&apos;t played for a while — the
-            other players can now skip your turn.
+        <div className="pop-in fixed inset-x-3 top-3 z-50 mx-auto flex max-w-md items-center gap-3 rounded-2xl bg-amber-500 px-4 py-3 font-bold text-slate-950 shadow-2xl">
+          <FaTriangleExclamation className="h-5 w-5 shrink-0" />
+          <p className="flex-1 text-sm leading-tight">
+            Still there? Others can skip your turn.
           </p>
           <button
             onClick={() => socket.emit("keepWaiting")}
             className="shrink-0 rounded-xl bg-slate-950 px-4 py-2 text-sm text-amber-300 transition-transform active:scale-95"
           >
-            I&apos;m here!
+            I&apos;m here
           </button>
         </div>
       )}
@@ -1646,12 +1574,9 @@ export default function GamePage() {
               <h2 className="text-lg font-black">
                 {state.players.find((p) => p.id === clock.playerId)?.name}{" "}
                 {state.players.find((p) => p.id === clock.playerId)?.connected
-                  ? "hasn't played in a while"
+                  ? "is taking a while"
                   : "is offline"}
               </h2>
-              <p className="text-sm text-slate-400">
-                Keep waiting, or skip their turn and play on?
-              </p>
               <div className="mt-1 flex gap-2">
                 <button
                   onClick={() => socket.emit("keepWaiting")}
@@ -1755,7 +1680,7 @@ export default function GamePage() {
             </h2>
             {state.players
               .filter((p) => p.id !== state.you.id)
-              .map((p, i) => (
+              .map((p) => (
                 <button
                   key={p.id}
                   onClick={() => discardSkip(p.id)}

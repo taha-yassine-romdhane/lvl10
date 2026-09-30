@@ -50,6 +50,16 @@ export function SettingsPanel({
   editable: boolean;
   onChange: (patch: Partial<RoomSettings>) => void;
 }) {
+  // Players who can't change anything just get a one-line summary.
+  if (!editable) {
+    return (
+      <p className="text-sm text-slate-300">
+        {settings.turnSeconds ? `${settings.turnSeconds}s turns` : "No turn timer"}
+        {settings.autoSkipOffline && " · offline players skipped"}
+        {` · ${settings.botLevel} bots`}
+      </p>
+    );
+  }
   return (
     <div className="flex flex-col gap-3.5">
       <div className="flex flex-col gap-1.5">
@@ -63,23 +73,14 @@ export function SettingsPanel({
             label: s === 0 ? "Off" : `${s}s`,
           }))}
         />
-        <span className="text-[11px] text-slate-500">
-          After this long, others can wait or skip an idle player.
-        </span>
       </div>
       <label
         className={`flex items-center justify-between gap-3 ${
           editable ? "cursor-pointer" : ""
         }`}
       >
-        <span className="flex flex-col">
-          <span className="text-xs font-bold text-slate-400">
-            Auto-skip offline players
-          </span>
-          <span className="text-[11px] text-slate-500">
-            Don&apos;t ask — skip someone who lost connection when their time
-            runs out.
-          </span>
+        <span className="text-xs font-bold text-slate-400">
+          Auto-skip offline players
         </span>
         <button
           type="button"
@@ -113,11 +114,6 @@ export function SettingsPanel({
           ]}
         />
       </div>
-      {!editable && (
-        <p className="text-[11px] text-slate-500">
-          Only the host can change these.
-        </p>
-      )}
     </div>
   );
 }
@@ -162,40 +158,30 @@ export function HowToPlay() {
     <div className="flex flex-col gap-4 text-sm text-slate-300">
       <ol className="flex list-decimal flex-col gap-1.5 pl-5">
         <li>
-          On your turn, <b>draw</b> one card — from the deck or the top of the
-          discard pile.
+          <b>Draw</b> a card — deck or discard.
         </li>
         <li>
-          If you can, <b>lay down</b> your level: tap cards, then{" "}
-          <b>+ add</b> them to each group and press <b>Lay down</b>.
+          <b>Lay down</b> your level: tap cards, tap a group, press Lay down.
         </li>
         <li>
-          Once you&apos;ve laid down, <b>add cards</b> to any meld on the table
-          (tap a card, then a glowing meld).
+          Then <b>add</b> cards: tap a card, then a glowing meld.
         </li>
         <li>
-          End your turn by <b>discarding</b> one card — tap it, then tap the
-          discard pile.
+          <b>Discard</b> one card to end your turn.
         </li>
       </ol>
       <ul className="flex flex-col gap-1 rounded-xl bg-slate-950/40 p-3 text-xs text-slate-400">
         <li>
-          <b className="text-slate-200">Set</b> — same number ·{" "}
-          <b className="text-slate-200">Run</b> — numbers in a row ·{" "}
-          <b className="text-slate-200">Color</b> — all one color
+          <b className="text-slate-200">Set</b> same number ·{" "}
+          <b className="text-slate-200">Run</b> in a row ·{" "}
+          <b className="text-slate-200">Color</b> same color
         </li>
         <li>
-          <b className="text-slate-200">Wild</b> fits anywhere ·{" "}
-          <b className="text-slate-200">Skip</b> makes a player miss a turn
+          <b className="text-slate-200">Wild</b> any card ·{" "}
+          <b className="text-slate-200">Skip</b> skips a player
         </li>
-        <li>
-          When someone empties their hand the round ends: everyone who laid
-          down moves up a level; cards left in hand cost points (1–9: 5, 10–12:
-          10, wild/skip: 25).
-        </li>
-        <li>
-          First to finish level 10 wins — ties go to the lowest score.
-        </li>
+        <li>Empty your hand to end the round. Laid down → next level.</li>
+        <li>First past level 10 wins. Leftover cards cost points.</li>
       </ul>
       <div>
         <h3 className="mb-2 text-xs font-bold tracking-wide text-slate-400 uppercase">

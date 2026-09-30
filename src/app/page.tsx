@@ -185,9 +185,6 @@ export default function Lobby() {
         >
           Create game
         </button>
-        <p className="-mt-2 text-center text-xs text-slate-500">
-          A room code is generated for you — invite friends or add bots.
-        </p>
 
         <div className="flex items-center gap-3 text-xs text-slate-500">
           <div className="h-px flex-1 bg-slate-700/60" /> or join a friend{" "}
