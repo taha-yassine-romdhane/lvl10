@@ -293,3 +293,16 @@ button,
 .presence-pulse {
   animation: presence-pulse 2.4s ease-in-out infinite;
 }
+
+/* "Your turn!" — loud enough to notice from across the table */
+.turn-banner {
+  color: #fff;
+  background: linear-gradient(90deg, var(--accent-deep), var(--accent-2));
+  border-color: color-mix(in srgb, var(--accent) 70%, white);
+  box-shadow: 0 10px 30px -8px color-mix(in srgb, var(--accent-deep) 70%, transparent);
+}
+.turn-dock {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 65%, transparent),
+    0 0 32px -6px color-mix(in srgb, var(--accent) 55%, transparent);
+}

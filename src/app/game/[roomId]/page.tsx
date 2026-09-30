@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   FaBan,
@@ -144,12 +150,60 @@ function Confetti() {
   );
 }
 
+/**
+ * The last game state seen in this tab, kept in sessionStorage so a refresh
+ * can draw the table instantly while the socket reconnects and rejoins.
+ * Read once per room per page load (the snapshot must stay stable).
+ */
+const bootCache = new Map<string, string | null>();
+function readBootCache(code: string): string | null {
+  if (!bootCache.has(code)) {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(`lvl10:state:${code}`);
+    } catch {
+      // storage blocked — just no instant restore
+    }
+    bootCache.set(code, raw);
+  }
+  return bootCache.get(code)!;
+}
+const noopSubscribe = () => () => undefined;
+
+/** Turn a failed rejoin into something a player can understand. */
+function explainJoinError(error: string, hadSeat: boolean): string {
+  if (error === "Room not found.")
+    return "This game isn't running anymore — it may have ended, or the server restarted.";
+  if (error === "That game has already started.")
+    return hadSeat
+      ? "We couldn't find your seat in this game — you may have been removed."
+      : "This game has already started. Ask the host to invite you to the next one.";
+  return error;
+}
+
 export default function GamePage() {
   const { roomId } = useParams<{ roomId: string }>();
   const router = useRouter();
   const code = (roomId ?? "").toUpperCase();
 
-  const [state, setState] = useState<ClientState | null>(null);
+  const [liveState, setState] = useState<ClientState | null>(null);
+  const cachedRaw = useSyncExternalStore(
+    noopSubscribe,
+    () => readBootCache(code),
+    () => null
+  );
+  const cached = useMemo(() => {
+    try {
+      const s = cachedRaw ? (JSON.parse(cachedRaw) as ClientState) : null;
+      return s?.roomId === code ? s : null;
+    } catch {
+      return null;
+    }
+  }, [cachedRaw, code]);
+  // Until the server answers, show the cached table (read-only).
+  const state = liveState ?? cached;
+  const live = liveState !== null;
+  const [fatal, setFatal] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [joinName, setJoinName] = useState("");
   const [needsName, setNeedsName] = useState(false);
@@ -187,13 +241,30 @@ export default function GamePage() {
         { roomId: code, name, token },
         (res: { token?: string; error?: string }) => {
           if (res.error || !res.token) {
-            setError(res.error ?? "Could not join.");
-            setNeedsName(true);
+            const message = res.error ?? "Could not join.";
+            if (message === "Enter a name.") {
+              // new visitor to a lobby: ask for a name
+              setJoinName((n) => n || randomName());
+              setNeedsName(true);
+              return;
+            }
+            // The room or seat is gone: say so plainly and forget it.
+            try {
+              localStorage.removeItem(`lvl10:token:${code}`);
+              sessionStorage.removeItem(`lvl10:state:${code}`);
+              if (localStorage.getItem("lvl10:last-room") === code)
+                localStorage.removeItem("lvl10:last-room");
+            } catch {
+              // storage blocked
+            }
+            setFatal(explainJoinError(message, Boolean(token)));
             return;
           }
           localStorage.setItem(`lvl10:token:${code}`, res.token);
-          localStorage.setItem("lvl10:name", name);
+          localStorage.setItem("lvl10:last-room", code);
+          if (name) localStorage.setItem("lvl10:name", name);
           setNeedsName(false);
+          setFatal(null);
         }
       );
     },
@@ -206,6 +277,11 @@ export default function GamePage() {
       // Ignore stray updates from any other room this socket was in.
       if (s.roomId !== code) return;
       setState(s);
+      try {
+        sessionStorage.setItem(`lvl10:state:${code}`, JSON.stringify(s));
+      } catch {
+        // storage full or blocked — refresh just won't be instant
+      }
       setNow(Date.now());
       setClockDeadline(
         s.turnClock ? Date.now() + s.turnClock.msLeft : null
@@ -221,16 +297,20 @@ export default function GamePage() {
     socket.on("errorMessage", onError);
     socket.on("kicked", onKicked);
 
+    // Rejoin with the saved seat token even if no name is stored — the
+    // server keeps the seat's existing name.
     const name = localStorage.getItem("lvl10:name");
-    if (name) {
-      join(name);
+    const hasSeat = localStorage.getItem(`lvl10:token:${code}`) !== null;
+    if (name || hasSeat) {
+      join(name ?? "");
     } else {
       setJoinName(randomName());
       setNeedsName(true);
     }
     const onReconnect = () => {
       const n = localStorage.getItem("lvl10:name");
-      if (n) join(n);
+      if (n || localStorage.getItem(`lvl10:token:${code}`) !== null)
+        join(n ?? "");
     };
     socket.io.on("reconnect", onReconnect);
 
@@ -296,18 +376,29 @@ export default function GamePage() {
       : null;
   const youAreIdle = Boolean(clock?.stalled && clock.playerId === state?.you.id);
 
+  // Next.js rewrites <title> from page metadata after hydration and on
+  // navigation, so re-apply ours whenever it gets changed underneath us.
   useEffect(() => {
-    document.title = youAreIdle
+    const wanted = youAreIdle
       ? "⚠ Still there? — Level 10"
-      : myTurn
+      : myTurn && live
         ? "● Your turn — Level 10"
         : "Level 10";
-  }, [myTurn, youAreIdle]);
+    const apply = () => {
+      if (document.title !== wanted) document.title = wanted;
+    };
+    apply();
+    const head = document.querySelector("head");
+    if (!head) return;
+    const observer = new MutationObserver(apply);
+    observer.observe(head, { subtree: true, childList: true, characterData: true });
+    return () => observer.disconnect();
+  }, [myTurn, youAreIdle, live]);
 
   // Buzz the phone when it becomes your turn, and harder when you're idle.
   useEffect(() => {
-    if (myTurn) navigator.vibrate?.(60);
-  }, [myTurn]);
+    if (myTurn && live) navigator.vibrate?.(60);
+  }, [myTurn, live]);
   useEffect(() => {
     if (youAreIdle) navigator.vibrate?.([120, 80, 120]);
   }, [youAreIdle]);
@@ -348,6 +439,14 @@ export default function GamePage() {
       if (res?.removedSeat) {
         localStorage.removeItem(`lvl10:token:${code}`);
       }
+      // Leaving on purpose: don't offer "continue" on the home page.
+      if (localStorage.getItem("lvl10:last-room") === code)
+        localStorage.removeItem("lvl10:last-room");
+      try {
+        sessionStorage.removeItem(`lvl10:state:${code}`);
+      } catch {
+        // storage blocked
+      }
       router.push("/");
     });
   }, [code, router]);
@@ -359,6 +458,35 @@ export default function GamePage() {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       });
+  }
+
+  if (fatal) {
+    return (
+      <main className="table-bg safe-area flex min-h-dvh flex-col items-center justify-center gap-5 px-4 text-white">
+        <div className="panel pop-in flex max-w-sm flex-col items-center gap-4 rounded-3xl p-8 text-center">
+          <Wordmark className="text-xl text-slate-300" />
+          <FaTriangleExclamation className="h-8 w-8 text-amber-400" />
+          <h1 className="text-2xl font-black">
+            Room <span className="accent font-mono">{code}</span>
+          </h1>
+          <p className="text-sm text-slate-300">{fatal}</p>
+          <div className="flex w-full flex-col gap-2">
+            <button
+              onClick={() => router.push("/")}
+              className="btn-accent rounded-xl py-3 font-bold hover:brightness-110"
+            >
+              Start or join another game
+            </button>
+            <button
+              onClick={() => location.reload()}
+              className="rounded-xl bg-slate-700/70 py-3 text-sm font-bold hover:bg-slate-600"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </main>
+    );
   }
 
   if (needsName) {
@@ -436,6 +564,19 @@ export default function GamePage() {
       // private mode: the tip just shows again next time
     }
   }
+
+  // Reconnecting / restoring banner. While showing a cached table the page is
+  // read-only (a click would only produce "You are not in a room.").
+  const connectionBanner =
+    !online || !live ? (
+      <>
+        {!live && <div className="fixed inset-0 z-[55] cursor-wait" />}
+        <div className="fixed inset-x-3 top-3 z-[60] mx-auto flex max-w-sm items-center justify-center gap-2.5 rounded-2xl bg-slate-800/95 px-4 py-3 text-sm font-bold shadow-2xl ring-1 ring-white/10">
+          <span className="h-2.5 w-2.5 animate-ping rounded-full bg-amber-400" />
+          {online ? "Restoring your game…" : "Connection lost — reconnecting…"}
+        </div>
+      </>
+    ) : null;
 
   // Settings / rules sheet, available in every phase.
   const sheetView =
@@ -784,6 +925,7 @@ export default function GamePage() {
         </button>
         {error && <p className="text-sm text-red-400">{error}</p>}
         {sheetView}
+        {connectionBanner}
       </main>
     );
   }
@@ -903,6 +1045,7 @@ export default function GamePage() {
             </button>
           </div>
         )}
+        {connectionBanner}
       </main>
     );
   }
@@ -1165,7 +1308,43 @@ export default function GamePage() {
         </div>
 
         {/* piles — centered on the table: big discard, smaller draw beside it */}
-        <div className="order-first flex justify-center sm:pointer-events-none sm:absolute sm:inset-0 sm:order-none sm:items-center">
+        <div className="order-first flex flex-col items-center justify-center gap-3 sm:pointer-events-none sm:absolute sm:inset-0 sm:order-none sm:gap-4">
+          {/* whose turn it is, right where you're looking */}
+          <div
+            aria-live="polite"
+            className={`pointer-events-auto flex flex-col items-center rounded-2xl px-5 py-2 text-center transition-all duration-300 ${
+              myTurn
+                ? "turn-banner glow-pulse border"
+                : "text-slate-400"
+            }`}
+          >
+            <span
+              className={`flex items-center gap-2 font-black ${
+                myTurn ? "text-lg sm:text-2xl" : "text-sm sm:text-base"
+              }`}
+            >
+              {myTurn && <FaWandMagicSparkles className="h-4 w-4" />}
+              {myTurn ? "Your turn!" : `${currentName ?? "…"} is playing…`}
+              {myTurn && clockSecs !== null && !clock?.stalled && (
+                <span
+                  className={`font-mono text-sm sm:text-base ${
+                    clockSecs <= 10 ? "text-amber-300" : "opacity-70"
+                  }`}
+                >
+                  {clockSecs}s
+                </span>
+              )}
+            </span>
+            {myTurn && (
+              <span className="text-xs font-bold opacity-85 sm:text-sm">
+                {state.phase === "draw"
+                  ? "Draw a card — tap the deck or take the discard"
+                  : you?.laidDown
+                    ? "Add cards to melds, then discard one to finish"
+                    : "Lay down your level if you can, then discard one"}
+              </span>
+            )}
+          </div>
           <div className="pointer-events-auto flex items-end gap-4 sm:gap-5">
         <div className="flex flex-col items-center gap-1.5">
           <button
@@ -1244,7 +1423,11 @@ export default function GamePage() {
 
       {/* bottom dock: level + staging + hand */}
       {you && (
-        <div className="panel flex flex-col gap-2 rounded-3xl p-2.5 sm:gap-3 sm:p-4">
+        <div
+          className={`panel flex flex-col gap-2 rounded-3xl p-2.5 transition-shadow duration-300 sm:gap-3 sm:p-4 ${
+            myTurn ? "turn-dock" : ""
+          }`}
+        >
           {showTip && (
             <div className="accent-banner flex items-start gap-2 rounded-xl border px-3 py-2 text-xs">
               <FaWandMagicSparkles className="mt-0.5 h-3 w-3 shrink-0" />
@@ -1432,13 +1615,8 @@ export default function GamePage() {
         </div>
       )}
 
-      {/* our own connection dropped */}
-      {!online && (
-        <div className="fixed inset-x-3 top-3 z-[60] mx-auto flex max-w-sm items-center justify-center gap-2.5 rounded-2xl bg-slate-800/95 px-4 py-3 text-sm font-bold shadow-2xl ring-1 ring-white/10">
-          <span className="h-2.5 w-2.5 animate-ping rounded-full bg-amber-400" />
-          Connection lost — reconnecting…
-        </div>
-      )}
+      {/* our own connection dropped / cached table while rejoining */}
+      {connectionBanner}
 
       {/* idle warning for the player who is holding things up */}
       {youAreIdle && (

@@ -1,8 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { FaDice, FaDownload } from "react-icons/fa6";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { FaDice, FaDownload, FaPlay } from "react-icons/fa6";
 import { getSocket } from "@/lib/clientSocket";
 import { LogoMark } from "@/components/Brand";
 import { CardView } from "@/components/CardView";
@@ -18,12 +18,24 @@ const HERO_CARDS: { card: Card; tilt: number; delay: number }[] = [
   { card: { id: "h5", kind: "number", color: "yellow", value: 10 }, tilt: 16, delay: 1200 },
 ];
 
+const noopSubscribe = () => () => undefined;
+function readLastRoom(): string | null {
+  try {
+    const room = localStorage.getItem("lvl10:last-room");
+    return room && localStorage.getItem(`lvl10:token:${room}`) ? room : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function Lobby() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The game you were last seated in — offered as "Continue".
+  const lastRoom = useSyncExternalStore(noopSubscribe, readLastRoom, () => null);
   const [installPrompt, setInstallPrompt] = useState<
     (Event & { prompt: () => Promise<void> }) | null
   >(null);
@@ -41,6 +53,17 @@ export default function Lobby() {
       window.removeEventListener("beforeinstallprompt", onPrompt);
       window.removeEventListener("appinstalled", onInstalled);
     };
+  }, []);
+
+  // Drop rejoin keys from the old storage format (lvl10:player:<room>).
+  useEffect(() => {
+    try {
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith("lvl10:player:")) localStorage.removeItem(key);
+      }
+    } catch {
+      // storage blocked
+    }
   }, []);
 
   useEffect(() => {
@@ -144,6 +167,16 @@ export default function Lobby() {
             </button>
           </div>
         </label>
+
+        {lastRoom && (
+          <button
+            onClick={() => router.push(`/game/${lastRoom}`)}
+            className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 py-3.5 font-bold shadow-lg shadow-emerald-900/40 transition-all hover:brightness-110 active:scale-[0.98]"
+          >
+            <FaPlay className="h-3.5 w-3.5" /> Continue game{" "}
+            <span className="font-mono tracking-widest">{lastRoom}</span>
+          </button>
+        )}
 
         <button
           onClick={createRoom}

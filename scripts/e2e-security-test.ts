@@ -17,7 +17,7 @@ function emit<T>(socket: Socket, event: string, payload?: unknown): Promise<T> {
 
 async function main() {
   const s = connect();
-  await new Promise((r) => s.on("connect", r));
+  await new Promise<void>((r) => s.on("connect", () => r()));
 
   // 1) malformed payloads must not crash the server
   s.emit("createRoom"); // no payload, no callback
@@ -54,7 +54,7 @@ async function main() {
   // 3) rate limiting: flood 200 events on a fresh socket; the server must
   // survive and still answer
   const f = connect();
-  await new Promise((r) => f.on("connect", r));
+  await new Promise<void>((r) => f.on("connect", () => r()));
   for (let i = 0; i < 200; i++) f.emit("addBot");
   await sleep(500);
   if (!f.connected) throw new Error("flood killed the connection");
