@@ -58,6 +58,7 @@ export function botStep(room: Room): boolean {
   const bot = gs.players[gs.currentPlayerIndex];
   if (!bot.isBot) return false;
   const reqs = LEVELS[Math.min(bot.level, 10) - 1];
+  const skill = gs.settings.botLevel;
 
   if (gs.phase === "draw") {
     // Only take the discard when it makes guaranteed progress (completes the
@@ -65,7 +66,8 @@ export function botStep(room: Room): boolean {
     // livelock two bots into swapping the same card forever.
     const top = gs.discardPile[gs.discardPile.length - 1];
     let takeDiscard = false;
-    if (top && top.kind !== "skip") {
+    // Easy bots never look at the discard pile.
+    if (skill !== "easy" && top && top.kind !== "skip") {
       if (!bot.laidDown) {
         takeDiscard = findLevelGroups([...bot.hand, top], reqs) !== null;
       } else {
@@ -94,6 +96,8 @@ export function botStep(room: Room): boolean {
     for (const card of bot.hand) {
       if (card.kind === "skip") continue;
       for (const meld of gs.melds) {
+        // Easy bots only build on their own melds.
+        if (skill === "easy" && meld.playerId !== bot.id) continue;
         if (hitMeld(meld, card)) {
           if (
             applyAction(gs, bot.id, {
@@ -120,9 +124,20 @@ export function botStep(room: Room): boolean {
     });
     return true;
   }
-  const ranked = [...bot.hand].sort(
-    (a, b) => usefulness(a, bot.hand, reqs) - usefulness(b, bot.hand, reqs)
-  );
+  if (skill === "easy") {
+    const pool = bot.hand.filter((c) => c.kind !== "wild");
+    const pick = (pool.length > 0 ? pool : bot.hand)[
+      Math.floor(Math.random() * (pool.length > 0 ? pool.length : bot.hand.length))
+    ];
+    applyAction(gs, bot.id, { type: "discard", cardId: pick.id });
+    return true;
+  }
+  // Hard bots also avoid feeding cards that fit a meld already on the table
+  // (anyone who has laid down could dump them there).
+  const feeds = (c: Card) =>
+    skill === "hard" && gs.melds.some((m) => hitMeld(m, c) !== null) ? 50 : 0;
+  const cost = (c: Card) => usefulness(c, bot.hand, reqs) + feeds(c);
+  const ranked = [...bot.hand].sort((a, b) => cost(a) - cost(b));
   applyAction(gs, bot.id, { type: "discard", cardId: ranked[0].id });
   return true;
 }

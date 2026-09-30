@@ -6,6 +6,7 @@ import {
   FaBan,
   FaCheck,
   FaChevronLeft,
+  FaCircleQuestion,
   FaChevronRight,
   FaCopy,
   FaCrown,
@@ -16,19 +17,29 @@ import {
   FaPlus,
   FaRightFromBracket,
   FaRobot,
+  FaRotateRight,
+  FaSliders,
   FaTrophy,
   FaTriangleExclamation,
   FaUserSlash,
+  FaXmark,
   FaWandMagicSparkles,
 } from "react-icons/fa6";
 import { getSocket } from "@/lib/clientSocket";
 import { Wordmark } from "@/components/Brand";
 import { CardBack, CardView } from "@/components/CardView";
 import { ThemePicker } from "@/components/ThemePicker";
+import { HowToPlay, Modal, SettingsPanel } from "@/components/GameExtras";
 import { LEVELS, describeLevel, describeRequirement } from "@/lib/game/levels";
 import { hitMeld } from "@/lib/game/validate";
 import { randomName } from "@/lib/names";
-import type { Card, ClientPlayer, ClientState, Meld } from "@/lib/game/types";
+import type {
+  Card,
+  ClientPlayer,
+  ClientState,
+  Meld,
+  RoomSettings,
+} from "@/lib/game/types";
 
 const COLOR_ORDER = { red: 0, blue: 1, green: 2, yellow: 3 } as const;
 
@@ -156,6 +167,16 @@ export default function GamePage() {
   const [clockDeadline, setClockDeadline] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [online, setOnline] = useState(true);
+  const [sheet, setSheet] = useState<"settings" | "help" | null>(null);
+  // First-game tip; initial render is "Connecting…", so reading storage in
+  // the initializer can't cause a hydration mismatch.
+  const [showTip, setShowTip] = useState(() => {
+    try {
+      return typeof window !== "undefined" && !localStorage.getItem("lvl10:tip-done");
+    } catch {
+      return false;
+    }
+  });
 
   const join = useCallback(
     (name: string) => {
@@ -400,6 +421,65 @@ export default function GamePage() {
   const stagedIds = new Set(staged.flat());
   const hand = state.you.hand;
   const isHost = state.hostId === state.you.id;
+  const hostPlayer = state.players.find((p) => p.id === state.hostId);
+  const hostAway = !hostPlayer || (!hostPlayer.connected && !hostPlayer.isBot);
+
+  function changeSettings(patch: Partial<RoomSettings>) {
+    socket.emit("updateSettings", patch);
+  }
+
+  function dismissTip() {
+    setShowTip(false);
+    try {
+      localStorage.setItem("lvl10:tip-done", "1");
+    } catch {
+      // private mode: the tip just shows again next time
+    }
+  }
+
+  // Settings / rules sheet, available in every phase.
+  const sheetView =
+    sheet === "settings" ? (
+      <Modal
+        title={
+          <>
+            <FaSliders className="accent h-4 w-4" /> Room {code}
+          </>
+        }
+        onClose={() => setSheet(null)}
+      >
+        <button
+          onClick={copyInvite}
+          className="flex items-center justify-center gap-2 rounded-xl bg-slate-700/70 py-2.5 text-sm font-bold transition-colors hover:bg-slate-600"
+        >
+          {copied ? (
+            <>
+              <FaCheck className="h-3.5 w-3.5 text-emerald-400" /> Link copied!
+            </>
+          ) : (
+            <>
+              <FaCopy className="h-3.5 w-3.5" /> Copy invite link
+            </>
+          )}
+        </button>
+        <SettingsPanel
+          settings={state.settings}
+          editable={isHost}
+          onChange={changeSettings}
+        />
+      </Modal>
+    ) : sheet === "help" ? (
+      <Modal
+        title={
+          <>
+            <FaCircleQuestion className="accent h-4 w-4" /> How to play
+          </>
+        }
+        onClose={() => setSheet(null)}
+      >
+        <HowToPlay />
+      </Modal>
+    ) : null;
 
   function toggleSelect(id: string) {
     setSelected((sel) =>
@@ -655,6 +735,19 @@ export default function GamePage() {
             </button>
           )}
         </div>
+        <div
+          className="panel pop-in w-full max-w-sm rounded-3xl p-6"
+          style={{ animationDelay: "140ms" }}
+        >
+          <h2 className="mb-4 flex items-center gap-2 text-sm font-bold tracking-wide text-slate-400 uppercase">
+            <FaSliders className="h-3.5 w-3.5" /> Room rules
+          </h2>
+          <SettingsPanel
+            settings={state.settings}
+            editable={isHost}
+            onChange={changeSettings}
+          />
+        </div>
         {isHost ? (
           <div className="flex flex-col items-center gap-2">
             <button
@@ -683,7 +776,14 @@ export default function GamePage() {
         >
           <FaRightFromBracket className="h-3.5 w-3.5" /> Leave room
         </button>
+        <button
+          onClick={() => setSheet("help")}
+          className="flex items-center gap-2 text-sm text-slate-400 transition-colors hover:text-white"
+        >
+          <FaCircleQuestion className="h-3.5 w-3.5" /> How to play
+        </button>
         {error && <p className="text-sm text-red-400">{error}</p>}
+        {sheetView}
       </main>
     );
   }
@@ -769,7 +869,7 @@ export default function GamePage() {
           </button>
         )}
         {state.phase === "roundEnd" &&
-          (isHost ? (
+          (isHost || hostAway ? (
             <button
               onClick={() => socket.emit("nextRound")}
               className="btn-accent glow-pulse rounded-xl px-10 py-3.5 font-bold shadow-lg transition-all hover:brightness-110 active:scale-[0.98]"
@@ -782,12 +882,26 @@ export default function GamePage() {
             </p>
           ))}
         {state.phase === "gameOver" && (
-          <button
-            onClick={leave}
-            className="rounded-xl bg-slate-700/80 px-10 py-3.5 font-bold transition-colors hover:bg-slate-600"
-          >
-            Back to lobby
-          </button>
+          <div className="flex w-full max-w-md flex-col items-center gap-3 sm:flex-row sm:justify-center">
+            {isHost || hostAway ? (
+              <button
+                onClick={() => socket.emit("rematch")}
+                className="btn-accent glow-pulse flex w-full items-center justify-center gap-2 rounded-xl px-8 py-3.5 font-bold shadow-lg transition-all hover:brightness-110 active:scale-[0.98] sm:w-auto"
+              >
+                <FaRotateRight className="h-4 w-4" /> Play again
+              </button>
+            ) : (
+              <p className="animate-pulse text-slate-400">
+                Waiting for the host to start a rematch…
+              </p>
+            )}
+            <button
+              onClick={leave}
+              className="w-full rounded-xl bg-slate-700/80 px-8 py-3.5 font-bold transition-colors hover:bg-slate-600 sm:w-auto"
+            >
+              Back to lobby
+            </button>
+          </div>
         )}
       </main>
     );
@@ -830,6 +944,7 @@ export default function GamePage() {
               <span className="font-bold">{p.name}</span>
               <span className="text-slate-300">
                 Lv {Math.min(p.level, 10)} · {p.handCount} cards
+                <span className="hidden sm:inline"> · {p.score} pts</span>
               </span>
               {p.laidDown && <FaCheck className="h-3 w-3 text-emerald-300" />}
               {p.pendingSkips > 0 && <FaBan className="h-3 w-3 text-red-400" />}
@@ -875,7 +990,7 @@ export default function GamePage() {
           </div>
           <button
             onClick={copyInvite}
-            className="panel flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700/60"
+            className="panel hidden items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700/60 sm:flex"
           >
             {copied ? (
               <>
@@ -888,6 +1003,22 @@ export default function GamePage() {
             )}
           </button>
           <ThemePicker />
+          <button
+            onClick={() => setSheet("help")}
+            title="How to play"
+            aria-label="How to play"
+            className="panel flex items-center rounded-xl px-3 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700/60"
+          >
+            <FaCircleQuestion className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setSheet("settings")}
+            title="Room & rules"
+            aria-label="Room and rules"
+            className="panel flex items-center rounded-xl px-3 py-2 text-xs font-bold text-slate-300 transition-colors hover:bg-slate-700/60"
+          >
+            <FaSliders className="h-3.5 w-3.5" />
+          </button>
           <button
             onClick={leave}
             title="Leave game (your seat is saved — rejoin with the same link)"
@@ -915,12 +1046,18 @@ export default function GamePage() {
               >
                 <div className="mb-2 flex items-center gap-2">
                   <Avatar name={p.name} index={state.players.indexOf(p)} status={presenceOf(p)} />
-                  <span className="text-sm font-bold text-slate-200">
+                  <span className="min-w-0 truncate text-sm font-bold text-slate-200">
                     {p.name}
                     {p.id === state.you.id && " (you)"}
                   </span>
                   <span
-                    className={`ml-auto rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                    className="ml-auto shrink-0 text-xs text-slate-400 tabular-nums"
+                    title="Penalty points so far — lower is better"
+                  >
+                    {p.score} pts
+                  </span>
+                  <span
+                    className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-bold ${
                       p.laidDown
                         ? "bg-emerald-500/15 text-emerald-300"
                         : "accent-banner border"
@@ -1108,6 +1245,29 @@ export default function GamePage() {
       {/* bottom dock: level + staging + hand */}
       {you && (
         <div className="panel flex flex-col gap-2 rounded-3xl p-2.5 sm:gap-3 sm:p-4">
+          {showTip && (
+            <div className="accent-banner flex items-start gap-2 rounded-xl border px-3 py-2 text-xs">
+              <FaWandMagicSparkles className="mt-0.5 h-3 w-3 shrink-0" />
+              <p className="flex-1 leading-relaxed">
+                <b>Tap</b> cards to select · <b>+ add</b> them to a group ·{" "}
+                <b>Lay down</b> · tap a glowing meld to add to it · tap the{" "}
+                <b>discard pile</b> to end your turn.{" "}
+                <button
+                  onClick={() => setSheet("help")}
+                  className="font-bold underline"
+                >
+                  Full rules
+                </button>
+              </p>
+              <button
+                onClick={dismissTip}
+                aria-label="Dismiss tip"
+                className="-m-1 p-1 opacity-70 hover:opacity-100"
+              >
+                <FaXmark className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2 sm:gap-3">
             <div
               className="flex w-full items-center justify-between gap-2.5 rounded-xl bg-slate-900/50 px-3 py-2 sm:w-auto"
@@ -1405,6 +1565,8 @@ export default function GamePage() {
             </div>
           );
         })()}
+
+      {sheetView}
 
       {/* skip target modal */}
       {skipPickFor && (

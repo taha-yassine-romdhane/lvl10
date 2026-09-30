@@ -1,7 +1,7 @@
 import { io, type Socket } from "socket.io-client";
 import type { ClientState, GameAction } from "../src/lib/game/types";
 
-const URL = "http://localhost:3000";
+const URL = process.env.TARGET_URL ?? "http://localhost:3000";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function emit<T>(socket: Socket, event: string, payload: unknown): Promise<T> {

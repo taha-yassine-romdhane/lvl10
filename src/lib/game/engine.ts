@@ -8,13 +8,24 @@ import type {
   GameState,
   Meld,
   Player,
+  RoomSettings,
 } from "./types";
 
 const HAND_SIZE = 10;
 
 let meldSeq = 0;
 
-export function createGame(roomId: string, hostId: string): GameState {
+export const DEFAULT_SETTINGS: RoomSettings = {
+  turnSeconds: 30,
+  autoSkipOffline: false,
+  botLevel: "normal",
+};
+
+export function createGame(
+  roomId: string,
+  hostId: string,
+  settings: RoomSettings = DEFAULT_SETTINGS
+): GameState {
   return {
     roomId,
     hostId,
@@ -28,7 +39,29 @@ export function createGame(roomId: string, hostId: string): GameState {
     round: 0,
     winnerIds: [],
     log: [],
+    settings: { ...settings },
   };
+}
+
+/** Back to the lobby with the same seats for a rematch. */
+export function resetGame(gs: GameState) {
+  gs.phase = "lobby";
+  gs.round = 0;
+  gs.drawPile = [];
+  gs.discardPile = [];
+  gs.melds = [];
+  gs.winnerIds = [];
+  gs.currentPlayerIndex = 0;
+  gs.dealerIndex = 0;
+  gs.log = ["Rematch! Waiting for the host to start."];
+  for (const p of gs.players) {
+    p.hand = [];
+    p.level = 1;
+    p.score = 0;
+    p.laidDown = false;
+    p.completedThisRound = false;
+    p.pendingSkips = 0;
+  }
 }
 
 export function addPlayer(
@@ -216,7 +249,12 @@ export function applyAction(
       }
       for (const b of built) {
         meldSeq += 1;
-        const meld: Meld = { id: `m${meldSeq}`, playerId, ...b };
+        // Random suffix: ids must stay unique after games are reloaded from disk.
+        const meld: Meld = {
+          id: `m${meldSeq}-${Math.random().toString(36).slice(2, 8)}`,
+          playerId,
+          ...b,
+        };
         gs.melds.push(meld);
       }
       const used = new Set(allIds);
@@ -347,6 +385,7 @@ export function sanitizeFor(gs: GameState, playerId: string): ClientState {
     round: gs.round,
     winnerIds: gs.winnerIds,
     log: gs.log.slice(-15),
+    settings: gs.settings,
     turnClock: null,
   };
 }

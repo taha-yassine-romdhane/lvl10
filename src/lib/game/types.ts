@@ -42,6 +42,19 @@ export interface Player {
 
 export type GamePhase = "lobby" | "draw" | "play" | "roundEnd" | "gameOver";
 
+export type BotLevel = "easy" | "normal" | "hard";
+
+/** Room rules the host can change. */
+export interface RoomSettings {
+  /** seconds a human may idle on their turn before others are asked; 0 = off */
+  turnSeconds: number;
+  /** skip an offline player's turn automatically instead of asking */
+  autoSkipOffline: boolean;
+  botLevel: BotLevel;
+}
+
+export const TURN_SECONDS_OPTIONS = [30, 60, 90, 0] as const;
+
 export interface GameState {
   roomId: string;
   hostId: string;
@@ -55,6 +68,7 @@ export interface GameState {
   round: number;
   winnerIds: string[];
   log: string[];
+  settings: RoomSettings;
 }
 
 /** What each individual client is allowed to see. */
@@ -85,6 +99,7 @@ export interface ClientState {
   round: number;
   winnerIds: string[];
   log: string[];
+  settings: RoomSettings;
   /**
    * Idle tracking for the human whose turn it is. `msLeft` counts down to the
    * idle warning; once `stalled`, other players are asked to wait or skip.

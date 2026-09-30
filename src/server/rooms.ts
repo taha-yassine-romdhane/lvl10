@@ -3,12 +3,20 @@ import {
   addPlayer,
   applyAction,
   createGame,
+  DEFAULT_SETTINGS,
   forfeitTurn,
   removePlayer,
+  resetGame,
   sanitizeFor,
   startRound,
 } from "../lib/game/engine";
-import type { GameAction, GameState } from "../lib/game/types";
+import {
+  TURN_SECONDS_OPTIONS,
+  type BotLevel,
+  type GameAction,
+  type GameState,
+  type RoomSettings,
+} from "../lib/game/types";
 import { BOT_NAMES } from "./bots";
 
 export interface Room {
@@ -35,6 +43,17 @@ export interface Room {
 
 const rooms = new Map<string, Room>();
 
+/** Set whenever room data changes; the persistence loop saves and clears it. */
+let dirty = false;
+export function markDirty() {
+  dirty = true;
+}
+export function takeDirty(): boolean {
+  const was = dirty;
+  dirty = false;
+  return was;
+}
+
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 function makeCode(): string {
@@ -45,7 +64,10 @@ function makeCode(): string {
   return rooms.has(code) ? makeCode() : code;
 }
 
-export function createRoom(name: string): {
+export function createRoom(
+  name: string,
+  settings: RoomSettings = DEFAULT_SETTINGS
+): {
   room: Room;
   playerId: string;
   token: string;
@@ -53,7 +75,7 @@ export function createRoom(name: string): {
   const id = makeCode();
   const playerId = randomUUID();
   const token = randomUUID();
-  const state = createGame(id, playerId);
+  const state = createGame(id, playerId, settings);
   addPlayer(state, playerId, name);
   const room: Room = {
     id,
@@ -76,6 +98,7 @@ function disposeRoom(room: Room) {
   if (room.botTimer) clearTimeout(room.botTimer);
   if (room.turnTimer) clearTimeout(room.turnTimer);
   rooms.delete(room.id);
+  markDirty();
 }
 
 export function getRoom(id: string): Room | undefined {
@@ -219,6 +242,67 @@ export function skipTurn(room: Room, requesterId: string): string | null {
   return null;
 }
 
+const BOT_LEVELS: BotLevel[] = ["easy", "normal", "hard"];
+
+/** Host changes room rules. Unknown or invalid fields are ignored. */
+export function updateSettings(
+  room: Room,
+  playerId: string,
+  patch: Record<string, unknown>
+): string | null {
+  const gs = room.state;
+  if (gs.hostId !== playerId) return "Only the host can change settings.";
+  const next = { ...gs.settings };
+  if (
+    typeof patch.turnSeconds === "number" &&
+    (TURN_SECONDS_OPTIONS as readonly number[]).includes(patch.turnSeconds)
+  ) {
+    next.turnSeconds = patch.turnSeconds;
+  }
+  if (typeof patch.autoSkipOffline === "boolean") {
+    next.autoSkipOffline = patch.autoSkipOffline;
+  }
+  if (BOT_LEVELS.includes(patch.botLevel as BotLevel)) {
+    next.botLevel = patch.botLevel as BotLevel;
+  }
+  if (next.turnSeconds !== gs.settings.turnSeconds) {
+    // restart the idle clock with the new limit
+    room.turnKey = null;
+    room.stalled = false;
+  }
+  gs.settings = next;
+  return null;
+}
+
+/** Host starts a rematch after game over: same seats, fresh levels. */
+export function rematch(room: Room, playerId: string): string | null {
+  const gs = room.state;
+  if (gs.phase !== "gameOver") return "The game isn't over yet.";
+  const host = gs.players.find((p) => p.id === gs.hostId);
+  const hostAway = !host || (!host.connected && !host.isBot);
+  if (gs.hostId !== playerId && !hostAway)
+    return "Only the host can start a rematch.";
+  if (hostAway) gs.hostId = playerId;
+  resetGame(gs);
+  room.moveSeq += 1;
+  return null;
+}
+
+/**
+ * With "auto-skip offline players" on, an idle player who is disconnected
+ * loses the turn without anyone having to decide. Returns true if skipped.
+ */
+export function autoSkipIfOffline(room: Room): boolean {
+  const gs = room.state;
+  if (!room.stalled || !gs.settings.autoSkipOffline) return false;
+  if (gs.phase !== "draw" && gs.phase !== "play") return false;
+  const current = gs.players[gs.currentPlayerIndex];
+  if (!current || current.isBot || current.connected) return false;
+  forfeitTurn(gs);
+  room.moveSeq += 1;
+  return true;
+}
+
 /** Someone chose to keep waiting for an idle player: restart their clock. */
 export function keepWaiting(room: Room, requesterId: string): string | null {
   if (!room.stalled) return null; // they moved in the meantime
@@ -287,6 +371,57 @@ export function markDisconnected(room: Room, playerId: string) {
   room.sockets.set(playerId, null);
   if ([...room.sockets.values()].every((s) => s === null)) {
     room.emptySince = Date.now();
+  }
+}
+
+// ---------- persistence ----------
+
+export interface SavedRoom {
+  id: string;
+  state: GameState;
+  tokens: [string, string][];
+  moveSeq: number;
+}
+
+export function snapshotRooms(): SavedRoom[] {
+  return [...rooms.values()].map((room) => ({
+    id: room.id,
+    state: room.state,
+    tokens: [...room.tokens],
+    moveSeq: room.moveSeq,
+  }));
+}
+
+/**
+ * Load rooms saved before a restart. Every human starts out offline; their
+ * browsers reconnect and rejoin with their tokens, and the game carries on.
+ */
+export function restoreRooms(saved: SavedRoom[]) {
+  const now = Date.now();
+  for (const s of saved) {
+    const state = s.state;
+    state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
+    const sockets = new Map<string, string | null>();
+    for (const p of state.players) {
+      p.away = false;
+      if (!p.isBot) {
+        p.connected = false;
+        sockets.set(p.id, null);
+      }
+    }
+    rooms.set(s.id, {
+      id: s.id,
+      state,
+      sockets,
+      tokens: new Map(s.tokens),
+      emptySince: now,
+      botTimer: null,
+      moveSeq: s.moveSeq,
+      turnKey: null,
+      turnTimer: null,
+      turnDeadline: null,
+      stalled: false,
+    });
   }
 }
 

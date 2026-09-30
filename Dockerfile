@@ -27,6 +27,10 @@ COPY --from=builder /app/public ./public
 COPY server.ts next.config.ts tsconfig.json ./
 COPY src ./src
 
+# Saved games live in /app/data (mount a volume there to keep them).
+ENV DATA_DIR=/app/data
+RUN mkdir -p /app/data
+
 # Run as the unprivileged "node" user
 RUN chown -R node:node /app
 USER node

@@ -4,6 +4,7 @@ import { Server, type Socket } from "socket.io";
 import {
   act,
   addBot,
+  autoSkipIfOffline,
   leaveRoom,
   cleanupRooms,
   createRoom,
@@ -11,17 +12,25 @@ import {
   joinRoom,
   keepWaiting,
   kickPlayer,
+  markDirty,
   markDisconnected,
   nextRound,
+  rematch,
   removeBot,
+  restoreRooms,
   roomCount,
   setAway,
   skipTurn,
+  snapshotRooms,
   startGame,
   stateFor,
+  takeDirty,
+  updateSettings,
   type Room,
 } from "./src/server/rooms";
 import { botStep } from "./src/server/bots";
+import { loadSavedRooms, saveRooms } from "./src/server/persist";
+import { DEFAULT_SETTINGS } from "./src/lib/game/engine";
 import type { GameAction } from "./src/lib/game/types";
 
 const dev =
@@ -31,8 +40,13 @@ const port = parseInt(process.env.PORT ?? "3000", 10);
 const MAX_ROOMS = 500;
 const RATE_LIMIT_WINDOW_MS = 2000;
 const RATE_LIMIT_MAX_EVENTS = 30;
-/** How long a human may sit on their turn before the others are asked. */
-const TURN_IDLE_MS = parseInt(process.env.TURN_IDLE_MS ?? "30000", 10);
+/**
+ * Default idle limit for new rooms (the host can change it per room).
+ * TURN_IDLE_MS overrides it, e.g. for fast end-to-end tests.
+ */
+const DEFAULT_TURN_SECONDS = process.env.TURN_IDLE_MS
+  ? parseInt(process.env.TURN_IDLE_MS, 10) / 1000
+  : DEFAULT_SETTINGS.turnSeconds;
 
 /** Callbacks arrive from untrusted clients — never call them unchecked. */
 function safeCb(cb: unknown): (arg: unknown) => void {
@@ -98,7 +112,16 @@ app.prepare().then(() => {
 
   const cleanupTimer = setInterval(cleanupRooms, 10 * 60 * 1000);
 
+  // Pick up games that were running before a restart / redeploy.
+  const saved = loadSavedRooms();
+  restoreRooms(saved);
+  if (saved.length > 0) console.log(`> restored ${saved.length} room(s)`);
+  const saveTimer = setInterval(() => {
+    if (takeDirty()) saveRooms(snapshotRooms());
+  }, 5000);
+
   function broadcast(room: Room) {
+    markDirty();
     syncTurnClock(room);
     for (const [playerId, socketId] of room.sockets) {
       if (socketId) {
@@ -117,8 +140,9 @@ app.prepare().then(() => {
     const gs = room.state;
     const current = gs.players[gs.currentPlayerIndex];
     const inPlay = gs.phase === "draw" || gs.phase === "play";
+    const idleMs = gs.settings.turnSeconds * 1000;
     const key =
-      inPlay && current && !current.isBot
+      inPlay && current && !current.isBot && idleMs > 0
         ? `${gs.round}|${current.id}|${room.moveSeq}`
         : null;
     if (key === room.turnKey) return;
@@ -126,14 +150,15 @@ app.prepare().then(() => {
     room.turnTimer = null;
     room.turnKey = key;
     room.stalled = false;
-    room.turnDeadline = key ? Date.now() + TURN_IDLE_MS : null;
+    room.turnDeadline = key ? Date.now() + idleMs : null;
     if (!key) return;
     room.turnTimer = setTimeout(() => {
       room.turnTimer = null;
       if (room.turnKey !== key) return;
       room.stalled = true;
+      autoSkipIfOffline(room);
       broadcast(room);
-    }, TURN_IDLE_MS);
+    }, idleMs);
   }
 
   function humansConnected(room: Room) {
@@ -170,6 +195,8 @@ app.prepare().then(() => {
     // A newer socket (reconnect, second tab) may own the seat now — leave it be.
     if (room.sockets.get(playerId) !== socket.id) return;
     markDisconnected(room, playerId);
+    // Already flagged idle and now gone too: skip right away if allowed.
+    autoSkipIfOffline(room);
     broadcast(room);
   }
 
@@ -223,7 +250,10 @@ app.prepare().then(() => {
       if (!name) return cb({ error: "Enter a name." });
       if (roomCount() >= MAX_ROOMS)
         return cb({ error: "Server is full — try again later." });
-      const { room, playerId, token } = createRoom(name);
+      const { room, playerId, token } = createRoom(name, {
+        ...DEFAULT_SETTINGS,
+        turnSeconds: DEFAULT_TURN_SECONDS,
+      });
       attach(socket, room, playerId);
       cb({ roomId: room.id, playerId, token });
       broadcast(room);
@@ -278,6 +308,13 @@ app.prepare().then(() => {
       if (setAway(room, playerId, away)) broadcast(room);
     });
     on("skipTurn", () => withRoom(skipTurn));
+    on("rematch", () => withRoom(rematch));
+    on("updateSettings", (payload) => {
+      if (typeof payload !== "object" || payload === null) return;
+      withRoom((room, playerId) =>
+        updateSettings(room, playerId, payload as Record<string, unknown>)
+      );
+    });
     on("keepWaiting", () => withRoom(keepWaiting));
     on("kickPlayer", (payload) => {
       const targetId = (payload as { playerId?: unknown })?.playerId;
@@ -337,6 +374,8 @@ app.prepare().then(() => {
 
   function shutdown() {
     clearInterval(cleanupTimer);
+    clearInterval(saveTimer);
+    saveRooms(snapshotRooms());
     io.close();
     httpServer.close(() => process.exit(0));
     // Fallback if connections keep the server alive.

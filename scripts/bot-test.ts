@@ -1,7 +1,7 @@
-import { addPlayer, createGame, startRound } from "../src/lib/game/engine";
+import { addPlayer, createGame, resetGame, startRound } from "../src/lib/game/engine";
 import { findLevelGroups } from "../src/lib/game/solver";
 import { botStep } from "../src/server/bots";
-import type { Card } from "../src/lib/game/types";
+import type { BotLevel, Card } from "../src/lib/game/types";
 import type { Room } from "../src/server/rooms";
 
 let failures = 0;
@@ -69,38 +69,70 @@ check(
   )
 );
 
-// --- full bots-only game simulation ---
-const gs = createGame("BOTS", "b1");
-addPlayer(gs, "b1", "Bot A", true);
-addPlayer(gs, "b2", "Bot B", true);
-addPlayer(gs, "b3", "Bot C", true);
-startRound(gs);
-
-const room = { state: gs } as Room;
-let steps = 0;
-let rounds = 1;
-while (gs.phase !== "gameOver" && steps < 100000) {
-  steps++;
-  if (gs.phase === "roundEnd") {
-    rounds++;
-    startRound(gs);
-    continue;
+// --- full bots-only game simulation, at every skill level ---
+function simulate(levels: BotLevel[]) {
+  const gs = createGame("BOTS", "b0");
+  levels.forEach((_, i) => addPlayer(gs, `b${i}`, `Bot ${i}`, true));
+  startRound(gs);
+  const room = { state: gs } as Room;
+  let steps = 0;
+  let rounds = 1;
+  while (gs.phase !== "gameOver" && steps < 100000) {
+    steps++;
+    if (gs.phase === "roundEnd") {
+      rounds++;
+      startRound(gs);
+      continue;
+    }
+    // each bot plays at its own skill: swap the room setting per turn
+    gs.settings.botLevel = levels[gs.currentPlayerIndex];
+    if (!botStep(room)) break;
   }
-  if (!botStep(room)) break;
+  return { gs, rounds, steps };
 }
 
-console.log(
-  `game finished: phase=${gs.phase}, rounds=${rounds}, steps=${steps}, levels=${gs.players
-    .map((p) => p.level)
-    .join(",")}, scores=${gs.players.map((p) => p.score).join(",")}`
-);
-check("bots finish a full game", gs.phase === "gameOver");
-check("a winner exists", gs.winnerIds.length > 0);
-check(
-  "winner reached level 11",
-  gs.players.some((p) => gs.winnerIds.includes(p.id) && p.level === 11)
-);
-check("game ends in sane number of rounds", rounds < 60);
+for (const level of ["easy", "normal", "hard"] as BotLevel[]) {
+  const { gs, rounds, steps } = simulate([level, level, level]);
+  console.log(
+    `${level}: phase=${gs.phase}, rounds=${rounds}, steps=${steps}, levels=${gs.players
+      .map((p) => p.level)
+      .join(",")}`
+  );
+  check(`${level} bots finish a full game`, gs.phase === "gameOver");
+  check(`${level}: a winner exists`, gs.winnerIds.length > 0);
+  check(
+    `${level}: winner reached level 11`,
+    gs.players.some((p) => gs.winnerIds.includes(p.id) && p.level === 11)
+  );
+  check(`${level}: sane number of rounds`, rounds < 80);
+
+  if (level === "normal") {
+    resetGame(gs);
+    check(
+      "rematch reset: lobby, level 1, score 0, empty hands",
+      gs.phase === "lobby" &&
+        gs.round === 0 &&
+        gs.players.every((p) => p.level === 1 && p.score === 0 && p.hand.length === 0)
+    );
+  }
+}
+
+// hard should beat easy more often than not
+let hardWins = 0;
+let easyWins = 0;
+const GAMES = 30;
+for (let g = 0; g < GAMES; g++) {
+  // alternate seats so turn order doesn't decide it
+  const seats: BotLevel[] = g % 2 ? ["hard", "easy"] : ["easy", "hard"];
+  const { gs } = simulate(seats);
+  for (const id of gs.winnerIds) {
+    const lvl = seats[Number(id.slice(1))];
+    if (lvl === "hard") hardWins++;
+    else easyWins++;
+  }
+}
+console.log(`head-to-head over ${GAMES} games: hard ${hardWins} – easy ${easyWins}`);
+check("hard bots beat easy bots overall", hardWins > easyWins);
 
 console.log(failures === 0 ? "\nAll bot tests passed." : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);
