@@ -218,6 +218,94 @@ body {
   pointer-events: none;
 }
 
+/* "Blocked!" announcement: slams in, holds, then fades away on its own */
+@keyframes block-backdrop {
+  0%,
+  100% {
+    opacity: 0;
+  }
+  10%,
+  82% {
+    opacity: 1;
+  }
+}
+.block-backdrop {
+  animation: block-backdrop 2.6s ease-out both;
+}
+
+@keyframes block-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-8deg);
+  }
+  10% {
+    opacity: 1;
+    transform: scale(1.08) rotate(2deg);
+  }
+  15% {
+    transform: scale(0.97) rotate(-1.5deg);
+  }
+  19% {
+    transform: scale(1.02) rotate(1deg);
+  }
+  23%,
+  84% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.9) translateY(-14px);
+  }
+}
+.block-pop {
+  animation: block-pop 2.6s ease-out both;
+  border-color: rgba(239, 68, 68, 0.55);
+  box-shadow: 0 0 60px -8px rgba(239, 68, 68, 0.6);
+}
+
+@keyframes block-stamp {
+  0% {
+    opacity: 0;
+    transform: scale(3) rotate(-35deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(0.88) rotate(5deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+.block-stamp {
+  animation: block-stamp 0.45s 0.22s cubic-bezier(0.3, 0.8, 0.4, 1) both;
+}
+
+@keyframes block-ring {
+  from {
+    opacity: 0.8;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+.block-ring {
+  animation: block-ring 0.9s 0.55s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .block-pop,
+  .block-stamp,
+  .block-ring {
+    animation-name: block-backdrop;
+    animation-delay: 0s;
+    animation-duration: 2.6s;
+  }
+}
+
 /* Branded card back: deep indigo with fine diagonal weave */
 .card-back-pattern {
   background:

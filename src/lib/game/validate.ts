@@ -67,6 +67,30 @@ export function buildMeld(req: Requirement, cards: Card[]): BuiltMeld | null {
 }
 
 /**
+ * While a group is still being put together: can `cards` ever become a valid
+ * meld for `req`? Returns what is wrong with them, or null if they are fine so
+ * far (more cards may still be needed).
+ */
+export function stagingProblem(req: Requirement, cards: Card[]): string | null {
+  if (cards.some((c) => c.kind === "skip"))
+    return "Skip cards can't be laid down.";
+  const naturals = cards.filter((c) => c.kind === "number");
+  if (req.type === "set") {
+    return naturals.every((c) => c.value === naturals[0].value)
+      ? null
+      : "A set needs cards with the same number.";
+  }
+  if (req.type === "color") {
+    return naturals.every((c) => c.color === naturals[0].color)
+      ? null
+      : "These cards must all be the same color.";
+  }
+  if (new Set(naturals.map((c) => c.value)).size !== naturals.length)
+    return "A run needs numbers in a row — no repeats.";
+  return cards.length > 12 ? "A run can't be longer than 12 cards." : null;
+}
+
+/**
  * Can `card` be added to `meld`? For runs, `end` picks which side a wild goes
  * on (a number card's side is inferred). Returns a new meld or null.
  */

@@ -55,6 +55,13 @@ export interface RoomSettings {
 
 export const TURN_SECONDS_OPTIONS = [30, 60, 90, 0] as const;
 
+/** A skip card played on someone. `seq` goes up by one with every skip. */
+export interface SkipEvent {
+  seq: number;
+  byId: string;
+  targetId: string;
+}
+
 export interface GameState {
   roomId: string;
   hostId: string;
@@ -69,6 +76,8 @@ export interface GameState {
   winnerIds: string[];
   log: string[];
   settings: RoomSettings;
+  /** the most recent skip card played, announced to everyone at the table */
+  lastSkip: SkipEvent | null;
 }
 
 /** What each individual client is allowed to see. */
@@ -100,6 +109,7 @@ export interface ClientState {
   winnerIds: string[];
   log: string[];
   settings: RoomSettings;
+  lastSkip: SkipEvent | null;
   /**
    * Idle tracking for the human whose turn it is. `msLeft` counts down to the
    * idle warning; once `stalled`, other players are asked to wait or skip.

@@ -40,6 +40,7 @@ export function createGame(
     winnerIds: [],
     log: [],
     settings: { ...settings },
+    lastSkip: null,
   };
 }
 
@@ -294,6 +295,11 @@ export function applyAction(
         if (!target || target.id === player.id)
           return { ok: false, error: "Choose another player to skip." };
         target.pendingSkips += 1;
+        gs.lastSkip = {
+          seq: (gs.lastSkip?.seq ?? 0) + 1,
+          byId: player.id,
+          targetId: target.id,
+        };
         log(gs, `${player.name} skipped ${target.name}!`);
       } else {
         log(gs, `${player.name} discarded.`);
@@ -386,6 +392,7 @@ export function sanitizeFor(gs: GameState, playerId: string): ClientState {
     winnerIds: gs.winnerIds,
     log: gs.log.slice(-15),
     settings: gs.settings,
+    lastSkip: gs.lastSkip,
     turnClock: null,
   };
 }

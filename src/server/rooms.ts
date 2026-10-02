@@ -401,6 +401,7 @@ export function restoreRooms(saved: SavedRoom[]) {
   for (const s of saved) {
     const state = s.state;
     state.settings = { ...DEFAULT_SETTINGS, ...state.settings };
+    state.lastSkip ??= null; // saved before skips were announced
     const sockets = new Map<string, string | null>();
     for (const p of state.players) {
       p.away = false;

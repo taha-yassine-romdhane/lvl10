@@ -4,7 +4,7 @@ import {
   createGame,
   startRound,
 } from "../src/lib/game/engine";
-import { buildMeld, hitMeld } from "../src/lib/game/validate";
+import { buildMeld, hitMeld, stagingProblem } from "../src/lib/game/validate";
 import type { Card, Meld } from "../src/lib/game/types";
 
 let failures = 0;
@@ -32,6 +32,14 @@ check("run with duplicate invalid", !buildMeld({ type: "run", size: 4 }, [num(3)
 check("run too spread invalid", !buildMeld({ type: "run", size: 4 }, [num(1), num(2), num(9), wild()]));
 const runHigh = buildMeld({ type: "run", size: 4 }, [num(11), num(12), wild(), wild()]);
 check("run near 12 shifts down", !!runHigh && runHigh.runValues!.join(",") === "9,10,11,12");
+
+// staging: wrong kinds of cards are refused before lay down
+check("run refused in a set slot", !!stagingProblem({ type: "set", size: 3 }, [num(4), num(5), num(6)]));
+check("partial set accepted", !stagingProblem({ type: "set", size: 3 }, [num(7), wild()]));
+check("set refused in a run slot", !!stagingProblem({ type: "run", size: 4 }, [num(7), num(7, "blue")]));
+check("partial run with a gap accepted", !stagingProblem({ type: "run", size: 4 }, [num(3), num(6)]));
+check("mixed colors refused in a color slot", !!stagingProblem({ type: "color", size: 7 }, [num(3), num(6, "blue")]));
+check("skip refused when staging", !!stagingProblem({ type: "set", size: 3 }, [skip()]));
 
 // requirement sizes are minimums — laying down MORE is allowed
 check("set of 3 with 5 cards valid", !!buildMeld({ type: "set", size: 3 }, [num(7), num(7), num(7, "blue"), num(7, "green"), wild()]));
@@ -93,7 +101,8 @@ check("hit ok", applyAction(gs, first.id, { type: "hit", meldId: setMeldId, card
 const skipCard = first.hand.find((c) => c.kind === "skip")!;
 check("skip needs target", !applyAction(gs, first.id, { type: "discard", cardId: skipCard.id }).ok);
 check("skip ok", applyAction(gs, first.id, { type: "discard", cardId: skipCard.id, skipTargetId: second.id }).ok);
-check("turn skipped back to first", gs.players[gs.currentPlayerIndex].id === first.id && second.pendingSkips === 0);
+check("skip announced", gs.lastSkip?.seq === 1 && gs.lastSkip.byId === first.id && gs.lastSkip.targetId === second.id);
+check("turn skipped back to first",gs.players[gs.currentPlayerIndex].id === first.id && second.pendingSkips === 0);
 
 // first goes out
 applyAction(gs, first.id, { type: "drawFromDeck" });

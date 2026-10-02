@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -36,7 +37,7 @@ import { CardBack, CardView } from "@/components/CardView";
 import { ThemePicker } from "@/components/ThemePicker";
 import { HowToPlay, Modal, SettingsPanel } from "@/components/GameExtras";
 import { LEVELS, describeLevel, describeRequirement } from "@/lib/game/levels";
-import { hitMeld } from "@/lib/game/validate";
+import { buildMeld, hitMeld, stagingProblem } from "@/lib/game/validate";
 import { randomName } from "@/lib/names";
 import type {
   Card,
@@ -44,6 +45,7 @@ import type {
   ClientState,
   Meld,
   RoomSettings,
+  SkipEvent,
 } from "@/lib/game/types";
 
 const COLOR_ORDER = { red: 0, blue: 1, green: 2, yellow: 3 } as const;
@@ -89,17 +91,23 @@ function Avatar({
   name,
   index,
   small,
+  large,
   status,
 }: {
   name: string;
   index: number;
   small?: boolean;
+  large?: boolean;
   status?: Presence;
 }) {
   return (
     <span
       className={`${AVATAR_BG[index % AVATAR_BG.length]} ${
-        small ? "h-6 w-6 text-xs" : "h-8 w-8 text-sm"
+        large
+          ? "h-20 w-20 text-4xl"
+          : small
+            ? "h-6 w-6 text-xs"
+            : "h-8 w-8 text-sm"
       } relative flex shrink-0 items-center justify-center rounded-full font-black text-white shadow ${
         status === "offline" ? "opacity-50 grayscale" : ""
       }`}
@@ -221,6 +229,10 @@ export default function GamePage() {
   const [now, setNow] = useState(() => Date.now());
   const [online, setOnline] = useState(true);
   const [sheet, setSheet] = useState<"settings" | "help" | null>(null);
+  const [blocked, setBlocked] = useState<SkipEvent | null>(null);
+  // Last skip already seen; null until the first state after (re)connecting,
+  // which only records it so an old block isn't announced again.
+  const skipSeen = useRef<number | null>(null);
 
   const join = useCallback(
     (name: string) => {
@@ -276,6 +288,18 @@ export default function GamePage() {
       setClockDeadline(
         s.turnClock ? Date.now() + s.turnClock.msLeft : null
       );
+      // Someone just played a skip card: announce it to the whole table.
+      const skipSeq = s.lastSkip?.seq ?? 0;
+      if (
+        s.lastSkip &&
+        skipSeen.current !== null &&
+        skipSeq !== skipSeen.current &&
+        (s.phase === "draw" || s.phase === "play")
+      ) {
+        setBlocked(s.lastSkip);
+        if (s.lastSkip.targetId === s.you.id) navigator.vibrate?.([80, 60, 160]);
+      }
+      skipSeen.current = skipSeq;
     };
     const onError = (message: string) => setError(message);
     const onKicked = (roomId: string) => {
@@ -306,7 +330,10 @@ export default function GamePage() {
 
     // Our own connection: drives the "Reconnecting…" banner.
     const onConnect = () => setOnline(true);
-    const onDisconnect = () => setOnline(false);
+    const onDisconnect = () => {
+      setOnline(false);
+      skipSeen.current = null;
+    };
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     const goOffline = () => setOnline(false);
@@ -351,6 +378,13 @@ export default function GamePage() {
     const t = setTimeout(() => setError(null), 4000);
     return () => clearTimeout(t);
   }, [error]);
+
+  // The "blocked" popup removes itself once its animation has played out.
+  useEffect(() => {
+    if (!blocked) return;
+    const t = setTimeout(() => setBlocked(null), 2600);
+    return () => clearTimeout(t);
+  }, [blocked]);
 
   const you = useMemo(
     () => state?.players.find((p) => p.id === state.you.id) ?? null,
@@ -609,12 +643,40 @@ export default function GamePage() {
     );
   }
 
-  function stageSelected(groupIndex: number) {
-    setStaged((groups) =>
-      groups.map((g, i) => (i === groupIndex ? [...g, ...selected] : g))
-    );
-    setSelected([]);
+  function cardsOf(ids: string[]): Card[] {
+    return ids.flatMap((id) => hand.find((c) => c.id === id) ?? []);
   }
+
+  /**
+   * Add cards to a staging group — refused when they can't belong to that
+   * kind of meld (e.g. a run dropped on a "set" slot).
+   */
+  function stageCards(groupIndex: number, ids: string[]): boolean {
+    const req = reqs[groupIndex];
+    if (!req || ids.length === 0) return false;
+    const problem = stagingProblem(
+      req,
+      cardsOf([...(staged[groupIndex] ?? []), ...ids])
+    );
+    if (problem) {
+      setError(`${describeRequirement(req)}: ${problem}`);
+      return false;
+    }
+    setStaged((groups) =>
+      groups.map((g, i) => (i === groupIndex ? [...g, ...ids] : g))
+    );
+    return true;
+  }
+
+  function stageSelected(groupIndex: number) {
+    if (stageCards(groupIndex, selected)) setSelected([]);
+  }
+
+  // A group is ready once its cards really form the meld, not just by count.
+  const groupReady = reqs.map(
+    (req, i) => buildMeld(req, cardsOf(staged[i] ?? [])) !== null
+  );
+  const allReady = groupReady.every(Boolean);
 
   function unstage(groupIndex: number, cardId: string) {
     setStaged((groups) =>
@@ -687,11 +749,9 @@ export default function GamePage() {
     const ids = dragIds.filter(
       (id) => hand.some((c) => c.id === id) && !stagedIds.has(id)
     );
-    setStaged((groups) =>
-      groups.map((g, i) => (i === groupIndex ? [...g, ...ids] : g))
-    );
-    setSelected((sel) => sel.filter((id) => !ids.includes(id)));
     setDragIds(null);
+    if (stageCards(groupIndex, ids))
+      setSelected((sel) => sel.filter((id) => !ids.includes(id)));
   }
 
   function dropOnDiscard(e: React.DragEvent) {
@@ -1416,7 +1476,7 @@ export default function GamePage() {
                   className={`flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-dashed px-2.5 py-1.5 transition-all duration-200 sm:flex-none ${
                     dragIds || selected.length > 0
                       ? "accent-banner cursor-pointer"
-                      : (staged[i]?.length ?? 0) >= req.size
+                      : groupReady[i]
                         ? "border-emerald-500/50 bg-emerald-500/5"
                         : "border-slate-600/50 bg-slate-900/40"
                   } ${dragIds ? "scale-[1.03]" : ""}`}
@@ -1424,7 +1484,7 @@ export default function GamePage() {
                   <div className="flex flex-col items-start">
                     <span
                       className={`text-[11px] font-bold whitespace-nowrap ${
-                        (staged[i]?.length ?? 0) >= req.size
+                        groupReady[i]
                           ? "text-emerald-400"
                           : "text-slate-300"
                       }`}
@@ -1465,15 +1525,9 @@ export default function GamePage() {
             {!you.laidDown && (
               <button
                 onClick={layDown}
-                disabled={
-                  !myTurn ||
-                  state.phase !== "play" ||
-                  !reqs.every((r, i) => (staged[i]?.length ?? 0) >= r.size)
-                }
+                disabled={!myTurn || state.phase !== "play" || !allReady}
                 className={`rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-5 py-2 text-sm font-bold shadow transition-all hover:brightness-110 active:scale-[0.98] disabled:opacity-40 ${
-                  myTurn &&
-                  state.phase === "play" &&
-                  reqs.every((r, i) => (staged[i]?.length ?? 0) >= r.size)
+                  myTurn && state.phase === "play" && allReady
                     ? "glow-pulse"
                     : ""
                 }`}
@@ -1702,6 +1756,41 @@ export default function GamePage() {
           </div>
         </div>
       )}
+
+      {/* a skip card was played: tell everyone who got blocked */}
+      {blocked &&
+        (() => {
+          const target = state.players.find((p) => p.id === blocked.targetId);
+          const by = state.players.find((p) => p.id === blocked.byId);
+          if (!target || !by) return null;
+          return (
+            <div
+              key={blocked.seq}
+              role="status"
+              className="block-backdrop pointer-events-none fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4"
+            >
+              <div className="block-pop panel flex flex-col items-center gap-3 rounded-3xl px-10 py-7 text-center">
+                <div className="relative">
+                  <Avatar
+                    name={target.name}
+                    index={state.players.indexOf(target)}
+                    large
+                  />
+                  <span className="block-ring absolute inset-0 rounded-full border-4 border-red-500" />
+                  <FaBan className="block-stamp absolute inset-0 h-20 w-20 text-red-500 drop-shadow-lg" />
+                </div>
+                <h2 className="text-2xl font-black sm:text-3xl">
+                  {target.id === state.you.id
+                    ? "You're blocked!"
+                    : `${target.name} is blocked!`}
+                </h2>
+                <p className="text-sm font-bold text-slate-300">
+                  by {by.id === state.you.id ? "you" : by.name}
+                </p>
+              </div>
+            </div>
+          );
+        })()}
 
       {/* error toast */}
       {error && (
